@@ -1,0 +1,66 @@
+# Keeps this fork's main branch in step with ryanhcode/sable, with AGENTS.md
+# removed from the code and from every commit in history.
+#
+# Each run rebuilds main from upstream: clone upstream, strip AGENTS.md from
+# all history with git-filter-repo, put this workflow file back on top as one
+# commit, and force-push. The rewrite is deterministic, so when upstream has
+# not changed the result is identical and nothing is pushed.
+#
+# Do not press GitHub's "Sync fork" button: it would merge upstream's original
+# history (including AGENTS.md) back in.
+name: Sync with upstream
+
+on:
+  schedule:
+    - cron: '17 4 * * *' # daily at 04:17 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  UPSTREAM: https://github.com/ryanhcode/sable.git
+  REMOVE_PATH: AGENTS.md
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get this workflow file
+        uses: actions/checkout@v6
+        with:
+          path: fork
+          sparse-checkout: .github/workflows/sync-upstream.yml
+          sparse-checkout-cone-mode: false
+
+      - name: Install git-filter-repo
+        run: pip install --quiet git-filter-repo==2.47.0
+
+      - name: Rebuild main from upstream without AGENTS.md
+        run: |
+          git clone --quiet --single-branch --branch main "$UPSTREAM" upstream
+          cd upstream
+          git filter-repo --quiet --force --path "$REMOVE_PATH" --invert-paths
+
+          # Re-add this workflow as one commit with fixed metadata so the
+          # same inputs always give the same commit id.
+          mkdir -p .github/workflows
+          cp ../fork/.github/workflows/sync-upstream.yml .github/workflows/sync-upstream.yml
+          git add .github/workflows/sync-upstream.yml
+          export GIT_AUTHOR_NAME="sable-sync" GIT_AUTHOR_EMAIL="sable-sync@users.noreply.github.com"
+          export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME" GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+          export GIT_AUTHOR_DATE="2026-01-01T00:00:00Z" GIT_COMMITTER_DATE="2026-01-01T00:00:00Z"
+          git commit --quiet -m "Add daily sync with ryanhcode/sable (AGENTS.md removed)"
+
+      - name: Push to fork
+        env:
+          # Fine-grained token with Contents + Workflows write on this repo.
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: |
+          cd upstream
+          gh auth setup-git
+          git push --force "https://github.com/${GITHUB_REPOSITORY}.git" HEAD:refs/heads/main
